@@ -1,0 +1,15 @@
+{
+  "monthly_product": {
+    "revenue": 723207196.5000004,
+    "cost_of_goods": 447567460.6743433
+  },
+  "monthly_category": {
+    "revenue": 723207196.4999998,
+    "cost_of_goods": 447567460.6743433
+  },
+  "stores": {
+    "revenue": 723207196.4999999,
+    "transactions": 966709,
+    "operating_expenses": 196229475.66413647
+  }
+}

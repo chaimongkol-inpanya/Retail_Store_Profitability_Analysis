@@ -1,0 +1,64 @@
+{
+  "generation": "run_355907831d0c",
+  "created_utc": "2026-11-17T16:39:44.025625+00:00",
+  "currency": "THB",
+  "provenance": "Mock data augmented by AI; fictional Thailand retail scenario",
+  "inputs": {
+    "branches.csv": {
+      "size": 1250,
+      "mtime_ns": 1794932002851285100
+    },
+    "branch_operating_inputs.csv": {
+      "size": 24522,
+      "mtime_ns": 1794933064796487700
+    },
+    "budget_lines.csv": {
+      "size": 156534,
+      "mtime_ns": 1794932286183881400
+    },
+    "generation_config.json": {
+      "size": 389,
+      "mtime_ns": 1794932286150626300
+    },
+    "products.csv": {
+      "size": 10840,
+      "mtime_ns": 1794932002856284600
+    },
+    "sales_lines.parquet": {
+      "size": 20781363,
+      "mtime_ns": 1794932267491943500
+    },
+    "supply\\daily_inventory.parquet": {
+      "size": 4432430,
+      "mtime_ns": 1794932270865725200
+    },
+    "supply\\manifest.json": {
+      "size": 231,
+      "mtime_ns": 1794932286150626300
+    },
+    "supply\\purchase_order_lines.csv": {
+      "size": 15276953,
+      "mtime_ns": 1794932273852353600
+    },
+    "supply\\stock_movements.parquet": {
+      "size": 10933622,
+      "mtime_ns": 1794932273443343400
+    },
+    "supply\\suppliers.csv": {
+      "size": 293,
+      "mtime_ns": 1794932002858795000
+    }
+  },
+  "rows": {
+    "products": 59940,
+    "category": 1998,
+    "stores": 333,
+    "receipt_mart": 1998,
+    "receipt_sample": 1000,
+    "budgets": 2664,
+    "branches": 18,
+    "stock": 1823760,
+    "orders": 157562,
+    "suppliers": 6
+  }
+}

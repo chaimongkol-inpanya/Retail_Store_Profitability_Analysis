@@ -1,91 +1,470 @@
-"""Reproducible Thailand retail facts: supply-constrained sales -> receipts -> marts."""
+"""Class-based, NumPy/Polars raw mock generator. No dashboard transformations here."""
+
+from datetime import date, timedelta
 from pathlib import Path
 import json
 import numpy as np
-import pandas as pd
+import polars as pl
+import pyarrow.parquet as pq
 
-ROOT=Path(__file__).resolve().parents[1]
-CONFIG={'seed':20261120,'start':'2025-01-01','end':'2026-10-31','currency':'THB','sku_per_category':30,'categories':['TOOLS','HOUSEHOLD','CLEANING','ELECTRICAL','STATIONERY','LIFESTYLE'],'effects':{'weekend':1.15,'songkran':1.12,'school':1.10,'rain_cleaning':1.12,'year_end':1.18}}
 
-def build():
- rng=np.random.default_rng(CONFIG['seed']);out=ROOT/'data';out.mkdir(exist_ok=True);supply=out/'supply';supply.mkdir(exist_ok=True)
- dates=pd.date_range(CONFIG['start'],CONFIG['end']); cats=CONFIG['categories']
- places={'North':['Chiang Mai','Chiang Rai','Lampang'],'Northeast':['Nakhon Ratchasima','Khon Kaen','Udon Thani'],'Central':['Bangkok','Nonthaburi','Pathum Thani'],'East':['Chonburi','Rayong','Chachoengsao'],'West':['Nakhon Pathom','Kanchanaburi','Ratchaburi'],'South':['Surat Thani','Phuket','Songkhla']}
- branches=[]
- for region,provinces in places.items():
-  for province in provinces:
-   i=len(branches);opened=['2025-04-01','2025-07-01','2025-10-01','2026-01-01','2026-04-01','2026-07-01'][i//3] if i%3==2 else '2022-01-01'
-   branches.append(dict(store_id=f'TH{i+1:03}',region_id=region,province=province,opened_date=opened,provenance='Synthetic Thailand retail data'))
- branches=pd.DataFrame(branches);branches.to_csv(out/'branches.csv',index=False)
- catalog=[]
- for ci,cat in enumerate(cats):
-  for j in range(30): catalog.append(dict(item_id=f'{cat}_{j+1:03}',cat_id=cat,dept_id=f'{cat}_{1+j//15}',price=float(rng.choice([29,49,79,99,149,199,299,499,799])),cost_ratio=float(np.clip(rng.normal([.65,.60,.62,.68,.55,.58][ci],.04),.45,.8))))
- catalog=pd.DataFrame(catalog);catalog.to_csv(out/'products.csv',index=False)
- suppliers=pd.DataFrame([dict(supplier_id=f'SUP{i+1:02}',supplier_name=f'Mock {c.title()} Supply',cat_id=c,promised_lead_days=3+i%4) for i,c in enumerate(cats)]);suppliers.to_csv(supply/'suppliers.csv',index=False)
- snapshots=[];orders=[];receipt_parts=[]
- for branch in branches.itertuples():
-  live=dates[dates>=branch.opened_date];n=len(live);scale=rng.uniform(.65,1.4);pending={};balances=rng.integers(12,35,len(catalog));initial=balances.copy();outstanding=np.zeros(len(catalog),int)
-  for di,date in enumerate(live):
-   opening=balances.copy();received=np.zeros(len(catalog),int)
-   for j,qty,order in pending.pop(date,[]):
-    balances[j]+=qty;received[j]+=qty;outstanding[j]-=order['ordered_units'];order['actual_receipt_date']=date.strftime('%Y-%m-%d');order['received_units']=qty;order['short_closed_units']=order['ordered_units']-qty;order['status']='Received'
-   seasonal=CONFIG['effects']['weekend'] if date.dayofweek>=5 else 1
-   if date.month==4 and 10<=date.day<=16:seasonal*=CONFIG['effects']['songkran']
-   if date.month in [11,12]:seasonal*=CONFIG['effects']['year_end']
-   ramp=min(1,.6+di/180*.4)
-   lam=np.full(len(catalog),1.6*scale*seasonal*ramp)
-   if date.month in [5,6]:lam[catalog.cat_id.eq('STATIONERY')]*=CONFIG['effects']['school']
-   if date.month in [6,7,8,9,10]:lam[catalog.cat_id.eq('CLEANING')]*=CONFIG['effects']['rain_cleaning']
-   demand=rng.poisson(lam);sold=np.minimum(demand,balances);balances-=sold
-   shrink=np.minimum(balances,(rng.random(len(catalog))<.002).astype(int));balances-=shrink
-   for j in range(len(catalog)):
-    snapshots.append((date.strftime('%Y-%m-%d'),branch.store_id,catalog.item_id[j],catalog.cat_id[j],int(opening[j]),int(received[j]),0,int(sold[j]),int(shrink[j]),int(balances[j]),int(demand[j]-sold[j]),int(initial[j]) if di==0 else 0))
-    position=balances[j]+outstanding[j]
-    lead=int(suppliers.promised_lead_days[j//30])
-    if position<lam[j]*(lead+3):
-     qty=max(1,int(np.ceil(lam[j]*18-position)));promised=date+pd.Timedelta(days=lead);delay=0 if rng.random()<.88 else int(rng.choice([1,2,4]));arrival=promised+pd.Timedelta(days=delay)
-     order=dict(po_line_id=f'PO{len(orders)+1:08}',supplier_id=suppliers.supplier_id[j//30],store_id=branch.store_id,item_id=catalog.item_id[j],cat_id=catalog.cat_id[j],order_date=date.strftime('%Y-%m-%d'),promised_date=promised.strftime('%Y-%m-%d'),ordered_units=qty,actual_receipt_date=None,received_units=0,short_closed_units=0,status='Open');orders.append(order);outstanding[j]+=qty;pending.setdefault(arrival,[]).append((j,max(1,int(qty*rng.uniform(.92,1))),order))
-   item_indices=np.repeat(np.arange(len(catalog)),sold)
-   if len(item_indices):
-    nr=max(1,int(len(item_indices)/2.8));receipt_ids=rng.integers(0,nr,len(item_indices));unique=np.unique(receipt_ids);mapping=dict(zip(unique,range(len(unique))))
-    frame=pd.DataFrame({'receipt_no':receipt_ids,'j':item_indices}).groupby(['receipt_no','j']).size().reset_index(name='units')
-    frame['receipt_id']=[f'{branch.store_id}-{date:%Y%m%d}-{mapping[i]:04}' for i in frame.receipt_no];frame['date']=date.strftime('%Y-%m-%d');frame['month']=date.strftime('%Y-%m');frame['store_id']=branch.store_id;frame['item_id']=catalog.item_id.to_numpy()[frame.j];frame['cat_id']=catalog.cat_id.to_numpy()[frame.j];frame['dept_id']=catalog.dept_id.to_numpy()[frame.j];frame['region_id']=branch.region_id
-    frame['unit_price']=catalog.price.to_numpy()[frame.j]*(1-rng.choice([0,.05,.10],len(frame),p=[.85,.1,.05]));frame['revenue']=frame.units*frame.unit_price
-    frame['cost_of_goods']=frame.units*catalog.price.to_numpy()[frame.j]*catalog.cost_ratio.to_numpy()[frame.j]*(1+(int(branch.store_id[-3:])%5-2)*.015)
-    receipt_parts.append(frame.drop(columns=['receipt_no','j']))
-  print(branch.store_id,'generated',flush=True)
- lines=pd.concat(receipt_parts,ignore_index=True);lines.to_parquet(out/'sales_lines.parquet',index=False)
- stock=pd.DataFrame(snapshots,columns=['date','store_id','item_id','cat_id','opening_units','receipt_units','emergency_units','sold_units','shrink_units','closing_units','unmet_demand_units','initial_units']);stock.to_parquet(supply/'daily_inventory.parquet',index=False)
- movements=[]
- for field,kind,sign in [('initial_units','OPENING',1),('receipt_units','PO_RECEIPT',1),('sold_units','SALE',-1),('shrink_units','SHRINK',-1)]:
-  f=stock[stock[field]>0][['date','store_id','item_id',field]].rename(columns={field:'units_signed'});f.units_signed*=sign;f['movement_type']=kind;movements.append(f)
- ledger=pd.concat(movements,ignore_index=True);ledger['movement_id']=[f'MOV{i:09}' for i in range(len(ledger))]
- po=pd.DataFrame(orders);lookup=po[po.status.eq('Received')][['actual_receipt_date','store_id','item_id','po_line_id']].rename(columns={'actual_receipt_date':'date'})
- ledger=ledger[ledger.movement_type.ne('PO_RECEIPT')].copy();ledger['po_line_id']=''
- receipts=po[po.status.eq('Received')][['actual_receipt_date','store_id','item_id','received_units','po_line_id']].rename(columns={'actual_receipt_date':'date','received_units':'units_signed'});receipts['movement_type']='PO_RECEIPT'
- ledger=pd.concat([ledger.drop(columns='movement_id'),receipts],ignore_index=True);ledger['movement_id']=[f'MOV{i:09}' for i in range(len(ledger))];ledger.to_parquet(supply/'stock_movements.parquet',index=False);po.to_csv(supply/'purchase_order_lines.csv',index=False)
+class ThailandMockGenerator:
+    DEFAULT = {
+        "seed": 20261120,
+        "start": "2025-01-01",
+        "end": "2026-10-31",
+        "currency": "THB",
+        "branch_limit": 18,
+        "effects": {
+            "weekend": 1.15,
+            "songkran": 1.12,
+            "school": 1.10,
+            "rain_cleaning": 1.12,
+            "year_end": 1.18,
+        },
+    }
+    CATEGORIES = [
+        "TOOLS",
+        "HOUSEHOLD",
+        "CLEANING",
+        "ELECTRICAL",
+        "STATIONERY",
+        "LIFESTYLE",
+    ]
+    PLACES = {
+        "North": ["Chiang Mai", "Chiang Rai", "Lampang"],
+        "Northeast": ["Nakhon Ratchasima", "Khon Kaen", "Udon Thani"],
+        "Central": ["Bangkok", "Nonthaburi", "Pathum Thani"],
+        "East": ["Chonburi", "Rayong", "Chachoengsao"],
+        "West": ["Nakhon Pathom", "Kanchanaburi", "Ratchaburi"],
+        "South": ["Surat Thani", "Phuket", "Songkhla"],
+    }
 
- group=['month','store_id','region_id','item_id','dept_id','cat_id'];product=lines.groupby(group,as_index=False).agg(units=('units','sum'),revenue=('revenue','sum'),cost_of_goods=('cost_of_goods','sum'))
- stock['month']=stock.date.str[:7];coverage=stock.groupby(['month','store_id']).agg(observed_days=('date','nunique'),period_start=('date','min'),period_end=('date','max')).reset_index();product=product.merge(coverage,on=['month','store_id'],validate='many_to_one');product['priced_units']=product.units;product['avg_sell_price']=product.revenue/product.units
- inv=stock.groupby(['month','store_id','item_id']).agg(avg_units=('closing_units','mean'),stockout_item_days=('closing_units',lambda s:s.eq(0).sum()),item_days=('date','count')).reset_index();product=product.merge(inv,on=['month','store_id','item_id'],validate='one_to_one');product['inventory_cost']=product.avg_units*(product.cost_of_goods/product.units);product.to_csv(out/'monthly_product.csv',index=False)
- category=product.groupby(['month','store_id','region_id','cat_id'],as_index=False).agg(units=('units','sum'),priced_units=('priced_units','sum'),revenue=('revenue','sum'),cost_of_goods=('cost_of_goods','sum'),inventory_cost=('inventory_cost','sum'),stockout_item_days=('stockout_item_days','sum'),item_days=('item_days','sum'),observed_days=('observed_days','first'),period_start=('period_start','first'),period_end=('period_end','first'));category.to_csv(out/'monthly_category.csv',index=False)
- store=category.groupby(['month','store_id','region_id'],as_index=False).agg(revenue=('revenue','sum'),observed_days=('observed_days','first'));trans=lines.groupby(['month','store_id']).receipt_id.nunique();store['transactions']=[trans.loc[(r.month,r.store_id)] for r in store.itertuples()];store['traffic']=(store.transactions/.62).round().astype(int)
- for col,rate in [('variable_logistics',.025),('variable_selling',.015),('variable_labor',.02)]:store[col]=store.revenue*rate
- base={branch:180*1.6*catalog.price.mean()*.99*(.75+(int(branch[-3:])%7)*.1) for branch in branches.store_id};rate=dict(zip(branches.store_id,np.linspace(.12,.30,18)))
- for col,fraction in [('fixed_rent',.4),('fixed_salaries',.45),('fixed_overhead',.15)]:store[col]=store.store_id.map(base)*store.store_id.map(rate)*store.observed_days*fraction
- store['operating_expenses']=store[['variable_logistics','variable_selling','variable_labor','fixed_rent','fixed_salaries','fixed_overhead']].sum(axis=1);store.to_csv(out/'monthly_store_mock.csv',index=False)
- rc=lines.groupby(['receipt_id','month','store_id','cat_id'],as_index=False)[['units','revenue','cost_of_goods']].sum();rc=rc.merge(store[['month','store_id','revenue','variable_logistics','variable_selling','variable_labor','fixed_rent','fixed_salaries','fixed_overhead']],on=['month','store_id'],suffixes=('','_store'),validate='many_to_one');rc['variable_opex']=rc.revenue/rc.revenue_store*(rc.variable_logistics+rc.variable_selling+rc.variable_labor);rc['allocated_fixed_cost']=rc.revenue/rc.revenue_store*(rc.fixed_rent+rc.fixed_salaries+rc.fixed_overhead)
- receipt_dir=out/'receipts';receipt_dir.mkdir(exist_ok=True)
- for (month,branch),f in rc.groupby(['month','store_id']):f[['receipt_id','month','store_id','cat_id','units','revenue','cost_of_goods','variable_opex','allocated_fixed_cost']].to_parquet(receipt_dir/f'{month}_{branch}.parquet',index=False)
- rc.groupby(['month','store_id','cat_id'],as_index=False).agg(receipts=('receipt_id','nunique'),units=('units','sum'),revenue=('revenue','sum'),cost_of_goods=('cost_of_goods','sum'),variable_opex=('variable_opex','sum'),allocated_fixed_cost=('allocated_fixed_cost','sum')).to_csv(out/'receipt_category_month.csv',index=False)
- manifest=dict(seed=CONFIG['seed'],receipts=int(lines.receipt_id.nunique()),receipt_category_rows=len(rc),partitions=len(store),currency='THB',provenance='Synthetic Thailand retail data');(out/'receipt_manifest.json').write_text(json.dumps(manifest,indent=2))
- sm=dict(seed=CONFIG['seed'],as_of=CONFIG['end'],sample_items=180,sku_store_pairs=3240,inventory_rows=len(stock),movements=len(ledger),po_lines=len(po),provenance='Synthetic Thailand retail data');(supply/'manifest.json').write_text(json.dumps(sm,indent=2));(out/'generation_config.json').write_text(json.dumps(CONFIG,indent=2))
- budget=[]
- for r in store.itertuples():
-  target=180*1.6*catalog.price.mean()*.99*(.75+(int(r.store_id[-3:])%7)*.1)*r.observed_days
-  for col in ['revenue','cost_of_goods','variable_logistics','variable_selling','variable_labor','fixed_rent','fixed_salaries','fixed_overhead']:
-   amount=target if col=='revenue' else target*.64 if col=='cost_of_goods' else target*dict(variable_logistics=.024,variable_selling=.014,variable_labor=.019)[col] if col.startswith('variable') else target*.21*dict(fixed_rent=.4,fixed_salaries=.45,fixed_overhead=.15)[col]
-   budget.append(dict(plan_version='TH_PLAN_V1',month=r.month,store_id=r.store_id,line=col,budget_amount=amount,observed_days=r.observed_days))
- pd.DataFrame(budget).to_csv(out/'budget_lines.csv',index=False)
- print(manifest,flush=True)
-if __name__=='__main__':build()
+    def __init__(self, root=None, config=None):
+        self.root = Path(root or Path(__file__).resolve().parents[1])
+        self.raw = self.root / "raw_data"
+        self.config = self.DEFAULT | (config or {})
+        self.rng = np.random.default_rng(self.config["seed"])
+        self.po_counter = 0
+        self.movement_counter = 0
+        self.config["effects"] = self.DEFAULT["effects"] | (config or {}).get(
+            "effects", {}
+        )
+        if (
+            self.config["branch_limit"] not in range(1, 19)
+            or self.config["end"] < self.config["start"]
+        ):
+            raise ValueError(
+                "Use 1-18 branches and an end date on or after the start date"
+            )
+
+    def dimensions(self):
+        branches = []
+        for region, provinces in self.PLACES.items():
+            for province in provinces:
+                i = len(branches)
+                opened = (
+                    [
+                        "2025-04-01",
+                        "2025-07-01",
+                        "2025-10-01",
+                        "2026-01-01",
+                        "2026-04-01",
+                        "2026-07-01",
+                    ][i // 3]
+                    if i % 3 == 2
+                    else "2022-01-01"
+                )
+                branches.append(
+                    dict(
+                        store_id=f"TH{i + 1:03}",
+                        region_id=region,
+                        province=province,
+                        opened_date=opened,
+                        provenance="Mock data augmented by AI",
+                    )
+                )
+        catalog = []
+        for i, cat in enumerate(self.CATEGORIES):
+            for j in range(30):
+                catalog.append(
+                    dict(
+                        item_id=f"{cat}_{j + 1:03}",
+                        cat_id=cat,
+                        dept_id=f"{cat}_{1 + j // 15}",
+                        price=float(
+                            self.rng.choice([29, 49, 79, 99, 149, 199, 299, 499, 799])
+                        ),
+                        cost_ratio=float(
+                            np.clip(
+                                self.rng.normal(
+                                    [0.65, 0.60, 0.62, 0.68, 0.55, 0.58][i], 0.04
+                                ),
+                                0.45,
+                                0.8,
+                            )
+                        ),
+                    )
+                )
+        return branches[: self.config["branch_limit"]], catalog
+
+    def generate(self):
+        self.raw.mkdir(parents=True, exist_ok=True)
+        supply = self.raw / "supply"
+        supply.mkdir(exist_ok=True)
+        branches, catalog = self.dimensions()
+        pl.DataFrame(branches).write_csv(self.raw / "branches.csv")
+        pl.DataFrame(catalog).write_csv(self.raw / "products.csv")
+        suppliers = [
+            dict(
+                supplier_id=f"SUP{i + 1:02}",
+                supplier_name=f"Mock {cat.title()} Supply",
+                cat_id=cat,
+                promised_lead_days=3 + i % 4,
+            )
+            for i, cat in enumerate(self.CATEGORIES)
+        ]
+        pl.DataFrame(suppliers).write_csv(supply / "suppliers.csv")
+        start = date.fromisoformat(self.config["start"])
+        end = date.fromisoformat(self.config["end"])
+        writers = {}
+        all_orders = []
+        inputs = []
+        budgets = []
+        counts = {"inventory_rows": 0, "movements": 0, "po_lines": 0}
+        prices = np.array([r["price"] for r in catalog])
+        ratios = np.array([r["cost_ratio"] for r in catalog])
+        cats = np.array([r["cat_id"] for r in catalog])
+        itemids = np.array([r["item_id"] for r in catalog])
+        deptids = np.array([r["dept_id"] for r in catalog])
+
+        def append(name, frame, path):
+            if frame.is_empty():
+                return
+            if name not in writers:
+                writers[name] = pq.ParquetWriter(
+                    path, frame.to_arrow().schema, compression="zstd"
+                )
+            writers[name].write_table(frame.to_arrow())
+
+        try:
+            for bi, branch in enumerate(branches):
+                first = max(start, date.fromisoformat(branch["opened_date"]))
+                if first > end:
+                    continue
+                pending = {}
+                scale = self.rng.uniform(0.65, 1.4)
+                balance = self.rng.integers(12, 35, 180)
+                initial = balance.copy()
+                outstanding = np.zeros(180, int)
+                snapshots = []
+                sales = []
+                orders = []
+                coverage = {}
+                for di in range((end - first).days + 1):
+                    day = first + timedelta(days=di)
+                    ds = day.isoformat()
+                    month = ds[:7]
+                    coverage[month] = coverage.get(month, 0) + 1
+                    opening = balance.copy()
+                    received = np.zeros(180, int)
+                    for j, qty, order in pending.pop(day, []):
+                        balance[j] += qty
+                        received[j] += qty
+                        outstanding[j] -= order["ordered_units"]
+                        order.update(
+                            actual_receipt_date=ds,
+                            received_units=qty,
+                            short_closed_units=order["ordered_units"] - qty,
+                            status="Received",
+                        )
+                    ef = self.config["effects"]
+                    season = ef["weekend"] if day.weekday() >= 5 else 1
+                    if day.month == 4 and 10 <= day.day <= 16:
+                        season *= ef["songkran"]
+                    if day.month in [11, 12]:
+                        season *= ef["year_end"]
+                    lam = np.full(
+                        180, 1.6 * scale * season * min(1, 0.6 + di / 180 * 0.4)
+                    )
+                    if day.month in [5, 6]:
+                        lam[cats == "STATIONERY"] *= ef["school"]
+                    if day.month in [6, 7, 8, 9, 10]:
+                        lam[cats == "CLEANING"] *= ef["rain_cleaning"]
+                    demand = self.rng.poisson(lam)
+                    sold = np.minimum(demand, balance)
+                    balance -= sold
+                    shrink = np.minimum(
+                        balance, (self.rng.random(180) < 0.002).astype(int)
+                    )
+                    balance -= shrink
+                    for j in range(180):
+                        snapshots.append(
+                            (
+                                ds,
+                                branch["store_id"],
+                                itemids[j],
+                                cats[j],
+                                int(opening[j]),
+                                int(received[j]),
+                                0,
+                                int(sold[j]),
+                                int(shrink[j]),
+                                int(balance[j]),
+                                int(demand[j] - sold[j]),
+                                int(initial[j]) if di == 0 else 0,
+                            )
+                        )
+                        position = balance[j] + outstanding[j]
+                        lead = suppliers[j // 30]["promised_lead_days"]
+                        if position < lam[j] * (lead + 3):
+                            qty = max(1, int(np.ceil(lam[j] * 18 - position)))
+                            promised = day + timedelta(days=lead)
+                            arrival = promised + timedelta(
+                                days=0
+                                if self.rng.random() < 0.88
+                                else int(self.rng.choice([1, 2, 4]))
+                            )
+                            self.po_counter += 1
+                            order = dict(
+                                po_line_id=f"PO{self.po_counter:08}",
+                                supplier_id=suppliers[j // 30]["supplier_id"],
+                                store_id=branch["store_id"],
+                                item_id=itemids[j],
+                                cat_id=cats[j],
+                                order_date=ds,
+                                promised_date=promised.isoformat(),
+                                ordered_units=qty,
+                                actual_receipt_date=None,
+                                received_units=0,
+                                short_closed_units=0,
+                                status="Open",
+                            )
+                            orders.append(order)
+                            outstanding[j] += qty
+                            pending.setdefault(arrival, []).append(
+                                (j, max(1, int(qty * self.rng.uniform(0.92, 1))), order)
+                            )
+                    indices = np.repeat(np.arange(180), sold)
+                    if len(indices):
+                        receipt = self.rng.integers(
+                            0, max(1, int(len(indices) / 2.8)), len(indices)
+                        )
+                        pairs, unitcount = np.unique(
+                            np.stack([receipt, indices], axis=1),
+                            axis=0,
+                            return_counts=True,
+                        )
+                        rids, jj = pairs[:, 0], pairs[:, 1]
+                        mapping = {k: i for i, k in enumerate(np.unique(rids))}
+                        net = prices[jj] * (
+                            1
+                            - self.rng.choice(
+                                [0, 0.05, 0.1], len(jj), p=[0.85, 0.1, 0.05]
+                            )
+                        )
+                        factor = 1 + (int(branch["store_id"][-3:]) % 5 - 2) * 0.015
+                        for k, j, u, price in zip(rids, jj, unitcount, net):
+                            sales.append(
+                                (
+                                    f"{branch['store_id']}-{day:%Y%m%d}-{mapping[k]:04}",
+                                    ds,
+                                    month,
+                                    branch["store_id"],
+                                    itemids[j],
+                                    cats[j],
+                                    deptids[j],
+                                    branch["region_id"],
+                                    int(u),
+                                    float(price),
+                                    float(u * price),
+                                    float(u * prices[j] * ratios[j] * factor),
+                                )
+                            )
+                stock = pl.DataFrame(
+                    snapshots,
+                    schema=[
+                        "date",
+                        "store_id",
+                        "item_id",
+                        "cat_id",
+                        "opening_units",
+                        "receipt_units",
+                        "emergency_units",
+                        "sold_units",
+                        "shrink_units",
+                        "closing_units",
+                        "unmet_demand_units",
+                        "initial_units",
+                    ],
+                    orient="row",
+                )
+                lines = pl.DataFrame(
+                    sales,
+                    schema=[
+                        "receipt_id",
+                        "date",
+                        "month",
+                        "store_id",
+                        "item_id",
+                        "cat_id",
+                        "dept_id",
+                        "region_id",
+                        "units",
+                        "unit_price",
+                        "revenue",
+                        "cost_of_goods",
+                    ],
+                    orient="row",
+                )
+                append("stock", stock, supply / "daily_inventory.parquet")
+                append("sales", lines, self.raw / "sales_lines.parquet")
+                counts["inventory_rows"] += stock.height
+                parts = []
+                for field, kind, sign in [
+                    ("initial_units", "OPENING", 1),
+                    ("sold_units", "SALE", -1),
+                    ("shrink_units", "SHRINK", -1),
+                ]:
+                    parts.append(
+                        stock.filter(pl.col(field) > 0).select(
+                            "date",
+                            "store_id",
+                            "item_id",
+                            (pl.col(field) * sign).alias("units_signed"),
+                            pl.lit(kind).alias("movement_type"),
+                            pl.lit("").alias("po_line_id"),
+                        )
+                    )
+                pos = (
+                    pl.DataFrame(
+                        orders, schema_overrides={"actual_receipt_date": pl.String}
+                    )
+                    if orders
+                    else None
+                )
+                if pos is not None:
+                    parts.append(
+                        pos.filter(pl.col("status") == "Received").select(
+                            pl.col("actual_receipt_date").alias("date"),
+                            "store_id",
+                            "item_id",
+                            pl.col("received_units").alias("units_signed"),
+                            pl.lit("PO_RECEIPT").alias("movement_type"),
+                            "po_line_id",
+                        )
+                    )
+                    all_orders.extend(orders)
+                ledger = pl.concat(parts).with_columns(
+                    pl.Series(
+                        "movement_id",
+                        [
+                            f"MOV{i:09}"
+                            for i in range(
+                                self.movement_counter,
+                                self.movement_counter + sum(f.height for f in parts),
+                            )
+                        ],
+                    )
+                )
+                self.movement_counter += ledger.height
+                append("ledger", ledger, supply / "stock_movements.parquet")
+                counts["movements"] += ledger.height
+                planned = (
+                    180
+                    * 1.6
+                    * prices.mean()
+                    * 0.99
+                    * (0.75 + (int(branch["store_id"][-3:]) % 7) * 0.1)
+                )
+                fixed_rate = 0.12 + bi / 17 * 0.18
+                for month, days in coverage.items():
+                    traffic = int(
+                        np.rint(
+                            lines.filter(pl.col("month") == month)[
+                                "receipt_id"
+                            ].n_unique()
+                            / 0.62
+                        )
+                    )
+                    record = dict(
+                        month=month,
+                        store_id=branch["store_id"],
+                        traffic=traffic,
+                        **{
+                            k: planned * fixed_rate * days * f
+                            for k, f in [
+                                ("fixed_rent", 0.4),
+                                ("fixed_salaries", 0.45),
+                                ("fixed_overhead", 0.15),
+                            ]
+                        },
+                    )
+                    inputs.append(record)
+                    target = planned * days
+                    for line, amount in dict(
+                        revenue=target,
+                        cost_of_goods=target * 0.64,
+                        variable_logistics=target * 0.024,
+                        variable_selling=target * 0.014,
+                        variable_labor=target * 0.019,
+                        fixed_rent=target * 0.21 * 0.4,
+                        fixed_salaries=target * 0.21 * 0.45,
+                        fixed_overhead=target * 0.21 * 0.15,
+                    ).items():
+                        budgets.append(
+                            dict(
+                                plan_version="TH_PLAN_V1",
+                                month=month,
+                                store_id=branch["store_id"],
+                                line=line,
+                                budget_amount=amount,
+                                observed_days=days,
+                            )
+                        )
+                print(branch["store_id"], "raw records generated", flush=True)
+        finally:
+            for writer in writers.values():
+                writer.close()
+        order_schema = {
+            key: pl.String
+            for key in [
+                "po_line_id",
+                "supplier_id",
+                "store_id",
+                "item_id",
+                "cat_id",
+                "order_date",
+                "promised_date",
+                "actual_receipt_date",
+                "status",
+            ]
+        }
+        order_schema.update(
+            {
+                key: pl.Int64
+                for key in ["ordered_units", "received_units", "short_closed_units"]
+            }
+        )
+        pl.DataFrame(all_orders, schema=order_schema).write_csv(
+            supply / "purchase_order_lines.csv"
+        )
+        pl.DataFrame(inputs).write_csv(self.raw / "branch_operating_inputs.csv")
+        pl.DataFrame(budgets).write_csv(self.raw / "budget_lines.csv")
+        counts["po_lines"] = len(all_orders)
+        (self.raw / "generation_config.json").write_text(
+            json.dumps(self.config, indent=2), encoding="utf-8"
+        )
+        (supply / "manifest.json").write_text(
+            json.dumps(
+                counts
+                | {"as_of": end.isoformat(), "provenance": "Mock data augmented by AI"},
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        return counts
+
+
+if __name__ == "__main__":
+    print(ThailandMockGenerator().generate())

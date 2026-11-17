@@ -1,5 +1,6 @@
-"""Build the complete synthetic Thailand dataset."""
-from thailand import build
+from src.pipeline import RetailPipeline
+from src.thailand import ThailandMockGenerator
 
 if __name__ == "__main__":
-    build()
+    ThailandMockGenerator().generate()
+    RetailPipeline().run()

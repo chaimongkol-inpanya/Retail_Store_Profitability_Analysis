@@ -1,2 +1,3 @@
 -r requirements.txt
 playwright==1.65.2
+ruff==0.17.5
