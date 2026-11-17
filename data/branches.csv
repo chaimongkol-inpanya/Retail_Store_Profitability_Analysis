@@ -1,0 +1,19 @@
+store_id,region_id,province,opened_date,provenance
+TH001,North,Chiang Mai,2022-01-01,Synthetic Thailand retail data
+TH002,North,Chiang Rai,2022-01-01,Synthetic Thailand retail data
+TH003,North,Lampang,2025-04-01,Synthetic Thailand retail data
+TH004,Northeast,Nakhon Ratchasima,2022-01-01,Synthetic Thailand retail data
+TH005,Northeast,Khon Kaen,2022-01-01,Synthetic Thailand retail data
+TH006,Northeast,Udon Thani,2025-07-01,Synthetic Thailand retail data
+TH007,Central,Bangkok,2022-01-01,Synthetic Thailand retail data
+TH008,Central,Nonthaburi,2022-01-01,Synthetic Thailand retail data
+TH009,Central,Pathum Thani,2025-10-01,Synthetic Thailand retail data
+TH010,East,Chonburi,2022-01-01,Synthetic Thailand retail data
+TH011,East,Rayong,2022-01-01,Synthetic Thailand retail data
+TH012,East,Chachoengsao,2026-01-01,Synthetic Thailand retail data
+TH013,West,Nakhon Pathom,2022-01-01,Synthetic Thailand retail data
+TH014,West,Kanchanaburi,2022-01-01,Synthetic Thailand retail data
+TH015,West,Ratchaburi,2026-04-01,Synthetic Thailand retail data
+TH016,South,Surat Thani,2022-01-01,Synthetic Thailand retail data
+TH017,South,Phuket,2022-01-01,Synthetic Thailand retail data
+TH018,South,Songkhla,2026-07-01,Synthetic Thailand retail data

@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+artifacts/*
+!artifacts/capture_dashboard.py
+.venv/
+.env

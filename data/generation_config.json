@@ -1,0 +1,22 @@
+{
+  "seed": 20261120,
+  "start": "2025-01-01",
+  "end": "2026-10-31",
+  "currency": "THB",
+  "sku_per_category": 30,
+  "categories": [
+    "TOOLS",
+    "HOUSEHOLD",
+    "CLEANING",
+    "ELECTRICAL",
+    "STATIONERY",
+    "LIFESTYLE"
+  ],
+  "effects": {
+    "weekend": 1.15,
+    "songkran": 1.12,
+    "school": 1.1,
+    "rain_cleaning": 1.12,
+    "year_end": 1.18
+  }
+}

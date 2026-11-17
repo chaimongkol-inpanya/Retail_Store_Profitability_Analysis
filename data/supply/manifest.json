@@ -1,0 +1,10 @@
+{
+  "seed": 20261120,
+  "as_of": "2026-10-31",
+  "sample_items": 180,
+  "sku_store_pairs": 3240,
+  "inventory_rows": 1823760,
+  "movements": 1575145,
+  "po_lines": 157562,
+  "provenance": "Synthetic Thailand retail data"
+}

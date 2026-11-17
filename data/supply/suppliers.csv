@@ -1,0 +1,7 @@
+supplier_id,supplier_name,cat_id,promised_lead_days
+SUP01,Mock Tools Supply,TOOLS,3
+SUP02,Mock Household Supply,HOUSEHOLD,4
+SUP03,Mock Cleaning Supply,CLEANING,5
+SUP04,Mock Electrical Supply,ELECTRICAL,6
+SUP05,Mock Stationery Supply,STATIONERY,3
+SUP06,Mock Lifestyle Supply,LIFESTYLE,4
